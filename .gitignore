@@ -73,3 +73,6 @@ infrastructure/**/test
 infrastructure/**/documents
 science/**/bin
 science/**/working
+
+# Vernier psy wrapper
+infrastructure/source/utilities/vernier_psy.f90

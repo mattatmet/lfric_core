@@ -13,13 +13,14 @@ their application in PSyclone optimisations scripts.
 
 from psyclone.domain.lfric import LFRicConstants
 from psyclone.psyGen import InvokeSchedule
-from psyclone.psyir.nodes import Loop, Routine, Directive
+from psyclone.psyir.nodes import Loop, Routine, Directive, Container
 from psyclone.transformations import (
-    Dynamo0p3ColourTrans,
-    Dynamo0p3OMPLoopTrans,
-    Dynamo0p3RedundantComputationTrans,
-    OMPParallelTrans,
+    LFRicColourTrans, #Dynamo0p3ColourTrans
+    LFRicOMPLoopTrans, #Dynamo0p3OMPLoopTrans
+    LFRicRedundantComputationTrans, #Dynamo0p3RedundantComputationTrans
+    OMPParallelTrans, #OMPParallelTrans
 )
+from psyclone.psyir.transformations import ProfileTrans
 
 # List of allowed 'setval_*' built-ins for redundant computation transformation
 SETVAL_BUILTINS = ["setval_c"]
@@ -50,7 +51,7 @@ def redundant_computation_setval(psyir):
 
     """
     # Import redundant computation transformation
-    rtrans = Dynamo0p3RedundantComputationTrans()
+    rtrans = LFRicRedundantComputationTrans()
 
     # Loop over all the InvokeSchedule in the PSyIR object
     for subroutine in psyir.walk(InvokeSchedule):
@@ -68,18 +69,18 @@ def redundant_computation_setval(psyir):
 
 
 # -----------------------------------------------------------------------------
-def colour_loops(psyir, enable_tiling=False):
+def colour_loops(psyir, enable_tiling=False,tiling_kernel_list=None):
     """
     Applies the colouring transformation to all applicable loops and optionally
     enables tiling.
-    It creates the instance of `Dynamo0p3ColourTrans` only once.
+    It creates the instance of `LFRicColourTrans` only once.
 
     :param psyir: the PSyIR of the PSy-layer.
     :type psyir: :py:class:`psyclone.psyir.nodes.FileContainer`
 
     """
     const = LFRicConstants()
-    ctrans = Dynamo0p3ColourTrans()
+    ctrans = LFRicColourTrans()
 
     # Loop over all the subroutines in the PSyIR object
     for subroutine in psyir.walk(Routine):
@@ -92,11 +93,15 @@ def colour_loops(psyir, enable_tiling=False):
                 and child.field_space.orig_name
                 not in const.VALID_DISCONTINUOUS_NAMES
             ):
-                ctrans.apply(child, options={"tiling": enable_tiling})
+                #ctrans.apply(child, options={"tiling": True})
+                if enable_tiling and (tiling_kernel_list is None or child.kernel.name in tiling_kernel_list):
+                    ctrans.apply(child, options={"tiling": True})
+                else:
+                    ctrans.apply(child, options={"tiling": False})
 
 
 # -----------------------------------------------------------------------------
-def openmp_parallelise_loops(psyir):
+def openmp_parallelise_loops(psyir,enable_profiler=False):
     """
     Applies OpenMP Loop transformation to each applicable loop.
 
@@ -104,17 +109,34 @@ def openmp_parallelise_loops(psyir):
     :type psyir: :py:class:`psyclone.psyir.nodes.FileContainer`
 
     """
-    otrans = Dynamo0p3OMPLoopTrans()
+    otrans = LFRicOMPLoopTrans()
     oregtrans = OMPParallelTrans()
+    if enable_profiler:
+        profile_trans = ProfileTrans()
 
     # Loop over all the InvokeSchedule in the PSyIR object
     for subroutine in psyir.walk(InvokeSchedule):
         # Add OpenMP to loops unless they are over colours, are null,
         # or if an outer loop is already parallelised (OpenMP is applied
         # to loop over tiles instead of cells if tiling is enabled)
+        count = 0
         for loop in subroutine.loops():
-            if loop.loop_type not in ["colours", "null"] and \
-               not loop.ancestor(Directive):
+            # Insert profiler calls before loop over colours
+            if enable_profiler and loop.loop_type == "colours":
+                k_names = loop.ancestor(InvokeSchedule).coded_kernels()
+                k_name = k_names[count].name
+                invoke_name = loop.ancestor(InvokeSchedule).invoke.name
+                file_name = loop.ancestor(Container).name[:-8]
+                if (file_name[-4:] == "_alg"):
+                    file_name = file_name[:-4]
+                if (len(invoke_name) > 20):
+                    invoke_name = invoke_name[:9] + ".."  + invoke_name[-7:]
+                if (len(file_name) > 24):
+                    file_name = file_name[:12] + ".." + file_name[-10:]
+                options = {"region_name": (file_name,invoke_name + ":" + k_name[:-5] + "_k"  + str(count))}
+                profile_trans.apply(loop)#,options=options)
+                count += 1
+            if loop.loop_type not in ["colours","null"] and not loop.ancestor(Directive):
                 oregtrans.apply(loop)
                 otrans.apply(loop, options={"reprod": True})
 

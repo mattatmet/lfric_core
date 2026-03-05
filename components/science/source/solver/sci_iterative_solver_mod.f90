@@ -27,6 +27,9 @@ module sci_iterative_solver_mod
                                    log_at_level
   use, intrinsic :: ieee_arithmetic, only : ieee_is_nan
 
+  use timing_mod,                         only: start_timing, stop_timing, &
+                                                tik, LPROF
+
   implicit none
 ! Removing the following "private" statement is a workaround for a bug that
 ! appeared in Intel v19. Every item in the module has an explicit access set,
@@ -1484,6 +1487,10 @@ contains
 
     logical(kind=l_def), allocatable :: converged(:)
 
+    integer(tik) :: id_solv, id_init, id_work 
+
+    if ( LPROF ) call start_timing( id_solv, 'block_gcr_solver' )
+
     n_fields = x%vector_size()
     allocate( initial_error(n_fields), final_error(n_fields), &
               relative_error(n_fields), scaled_error(n_fields), &
@@ -1493,6 +1500,7 @@ contains
     call x%duplicate(res)
     call x%duplicate(Ax)
 
+    if ( LPROF ) call start_timing( id_init, 'block_gcr_initial_guess' )
     ! initial guess
     call x%set_scalar(0.0_r_def)
     call self%prec%apply( b, x )
@@ -1500,6 +1508,7 @@ contains
 
     call res%copy(b)
     call res%axpy(-1.0_r_def, Ax)
+    if ( LPROF ) call stop_timing( id_init, 'block_gcr_initial_guess' )
 
     if ( self%monitor_convergence ) then
       ! if the input field has error smaller than the product of absolute and relative
@@ -1527,6 +1536,7 @@ contains
       allocate(v(iv)%vt, source=x)
     end do
 
+    if ( LPROF ) call start_timing( id_work, 'block_gcr_work_loop' )
     converged(:)=.false.
     ! initialisation complete, lets go to work.
     do iter = 1, self%max_iter
@@ -1597,6 +1607,8 @@ contains
         end if
     end do
 
+    if ( LPROF ) call stop_timing( id_work, 'block_gcr_work_loop' )
+
     if ( self%monitor_convergence ) then
       relative_error = final_error/initial_error
       do n = 1,n_fields
@@ -1624,6 +1636,8 @@ contains
     end do
 
     deallocate(v ,Pv)
+
+    if ( LPROF ) call stop_timing( id_solv, 'block_gcr_solver' )
 
   end subroutine block_gcr_solve
 end submodule block_gcr_smod

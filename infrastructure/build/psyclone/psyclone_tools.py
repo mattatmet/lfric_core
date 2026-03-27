@@ -69,7 +69,7 @@ def redundant_computation_setval(psyir):
 
 
 # -----------------------------------------------------------------------------
-def colour_loops(psyir, enable_tiling=False,tiling_kernel_list=None):
+def colour_loops(psyir, enable_tiling=False,tiling_kernel_list=None,allow_disc=False):
     """
     Applies the colouring transformation to all applicable loops and optionally
     enables tiling.
@@ -90,39 +90,41 @@ def colour_loops(psyir, enable_tiling=False,tiling_kernel_list=None):
             if (
                 isinstance(child, Loop)
                 and child.iteration_space.endswith("cell_column")
-                and child.field_space.orig_name
-                not in const.VALID_DISCONTINUOUS_NAMES
+                and (allow_disc or child.field_space.orig_name
+                not in const.VALID_DISCONTINUOUS_NAMES)
             ):
-                #ctrans.apply(child, options={"tiling": True})
                 if enable_tiling and (tiling_kernel_list is None or child.kernel.name in tiling_kernel_list):
                     ctrans.apply(child, options={"tiling": True})
                 else:
                     ctrans.apply(child, options={"tiling": False})
 
-
 # -----------------------------------------------------------------------------
-def openmp_parallelise_loops(psyir,enable_profiler=False):
+def profile_loops(psyir,colours_only=True):
     """
-    Applies OpenMP Loop transformation to each applicable loop.
+    Applies timing calipers to colour loops.
 
     :param psyir: the PSyIR of the PSy-layer.
     :type psyir: :py:class:`psyclone.psyir.nodes.FileContainer`
 
     """
-    otrans = LFRicOMPLoopTrans()
-    oregtrans = OMPParallelTrans()
-    if enable_profiler:
-        profile_trans = ProfileTrans()
+    profile_trans = ProfileTrans()
+    leave_loops = ["cells_in_colour",
+                   "tiles_in_colour",
+                   "cells_in_tile"]
 
     # Loop over all the InvokeSchedule in the PSyIR object
     for subroutine in psyir.walk(InvokeSchedule):
-        # Add OpenMP to loops unless they are over colours, are null,
-        # or if an outer loop is already parallelised (OpenMP is applied
-        # to loop over tiles instead of cells if tiling is enabled)
+        # Add timing calipers to coloured loops. This should be done
+        # before the application of the openmp transformation.
+        # 
         count = 0
         for loop in subroutine.loops():
+            #if len(loop.ancestor(InvokeSchedule).coded_kernels()) == 0:
+            #    continue
+            if not loop.coded_kernels():
+                continue
             # Insert profiler calls before loop over colours
-            if enable_profiler and loop.loop_type == "colours":
+            if (not colours_only and not loop.loop_type in leave_loops) or loop.loop_type == "colours":
                 k_names = loop.ancestor(InvokeSchedule).coded_kernels()
                 k_name = k_names[count].name
                 invoke_name = loop.ancestor(InvokeSchedule).invoke.name
@@ -134,8 +136,27 @@ def openmp_parallelise_loops(psyir,enable_profiler=False):
                 if (len(file_name) > 24):
                     file_name = file_name[:12] + ".." + file_name[-10:]
                 options = {"region_name": (file_name,invoke_name + ":" + k_name[:-5] + "_k"  + str(count))}
-                profile_trans.apply(loop)#,options=options)
+                profile_trans.apply(loop,options=options)
                 count += 1
+
+# -----------------------------------------------------------------------------
+def openmp_parallelise_loops(psyir):
+    """
+    Applies OpenMP Loop transformation to each applicable loop.
+
+    :param psyir: the PSyIR of the PSy-layer.
+    :type psyir: :py:class:`psyclone.psyir.nodes.FileContainer`
+
+    """
+    otrans = LFRicOMPLoopTrans()
+    oregtrans = OMPParallelTrans()
+
+    # Loop over all the InvokeSchedule in the PSyIR object
+    for subroutine in psyir.walk(InvokeSchedule):
+        # Add OpenMP to loops unless they are over colours, are null,
+        # or if an outer loop is already parallelised (OpenMP is applied
+        # to loop over tiles instead of cells if tiling is enabled)
+        for loop in subroutine.loops():
             if loop.loop_type not in ["colours","null"] and not loop.ancestor(Directive):
                 oregtrans.apply(loop)
                 otrans.apply(loop, options={"reprod": True})

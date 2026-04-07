@@ -69,7 +69,7 @@ def redundant_computation_setval(psyir):
 
 
 # -----------------------------------------------------------------------------
-def colour_loops(psyir, enable_tiling=False,tiling_kernel_list=None,allow_disc=False):
+def colour_loops(psyir, enable_tiling=False,tiling_kernel_list=None):
     """
     Applies the colouring transformation to all applicable loops and optionally
     enables tiling.
@@ -90,7 +90,7 @@ def colour_loops(psyir, enable_tiling=False,tiling_kernel_list=None,allow_disc=F
             if (
                 isinstance(child, Loop)
                 and child.iteration_space.endswith("cell_column")
-                and (allow_disc or child.field_space.orig_name
+                and (child.field_space.orig_name
                 not in const.VALID_DISCONTINUOUS_NAMES)
             ):
                 if enable_tiling and (tiling_kernel_list is None or child.kernel.name in tiling_kernel_list):
@@ -119,23 +119,14 @@ def profile_loops(psyir,colours_only=True):
         # 
         count = 0
         for loop in subroutine.loops():
-            #if len(loop.ancestor(InvokeSchedule).coded_kernels()) == 0:
-            #    continue
             if not loop.coded_kernels():
                 continue
             # Insert profiler calls before loop over colours
             if (not colours_only and not loop.loop_type in leave_loops) or loop.loop_type == "colours":
-                k_names = loop.ancestor(InvokeSchedule).coded_kernels()
-                k_name = k_names[count].name
+                k_name = loop.ancestor(InvokeSchedule).coded_kernels()[count].name
                 invoke_name = loop.ancestor(InvokeSchedule).invoke.name
-                file_name = loop.ancestor(Container).name[:-8]
-                if (file_name[-4:] == "_alg"):
-                    file_name = file_name[:-4]
-                if (len(invoke_name) > 20):
-                    invoke_name = invoke_name[:9] + ".."  + invoke_name[-7:]
-                if (len(file_name) > 24):
-                    file_name = file_name[:12] + ".." + file_name[-10:]
-                options = {"region_name": (file_name,invoke_name + ":" + k_name[:-5] + "_k"  + str(count))}
+                file_name = loop.ancestor(Container).name
+                options = {"region_name": (file_name,invoke_name + ":" + k_name + "_k"  + str(count))}
                 profile_trans.apply(loop,options=options)
                 count += 1
 
